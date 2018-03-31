@@ -88,11 +88,12 @@ def build_label_ids(labels):
         for word in sentence:
             label.append(word)
     label = set(label)
-    label_num = len(label)
+#    label_num = len(label)
     label_id['NUL'] = 0
     for i, label in enumerate(label):
         label_id[label] = i + 1
     id_label = {v : k for k, v in label_id.items()}
+    label_num = len(label_id.values())
            
     return (label_id, id_label, label_num)
 

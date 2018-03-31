@@ -26,44 +26,50 @@ FLAGS = flags.FLAGS
 def main(_):
     max_sentence = 150
     max_word = 70
-        
+    print('begin reading setences from dataset')    
     train_sentences, train_labels = util.read_sentences(os.path.join(FLAGS.dataset_path, 'train.txt')) 
     valid_sentences, valid_labels = util.read_sentences(os.path.join(FLAGS.dataset_path, 'valid.txt'))
     test_sentences, test_labels = util.read_sentences(os.path.join(FLAGS.dataset_path, 'test.txt'))
-    
+    print('finish reading')
+    print('begin initializing char embedding, each char represented by 30 dimension number')
     chars2ids, char_vocabulary, char_embedding= util.char_embedding_matrix(train_sentences + valid_sentences, 
                                                                           FLAGS.char_embedding_size)
     train_chars2ids  = util.char2id(chars2ids, char_vocabulary, train_sentences, max_sentence, max_word)
-    test_chars2ids = util.char2id(chars2ids, char_vocabulary, test_sentences, max_sentence, max_word)     
+    test_chars2ids = util.char2id(chars2ids, char_vocabulary, test_sentences, max_sentence, max_word)
+    print('finish initializing')
+    print('begin reading pre-trained word embedding, each word represented by 100 dimension number')     
     words2ids, word_vocabulary, word_embedding = util.word_embedding_matrix('./glove.6B.100d.txt', 
                                                                             train_sentences + valid_sentences, 
                                                                             FLAGS.word_embedding_size)
+    print('finish reading')
+    print('begin converting words and chars to ids seperately')
     train_words2ids, train_sequence_lengths = util.word2id(words2ids, word_vocabulary, train_sentences, max_sentence)
     test_words2ids, test_sequence_lengths = util.word2id(words2ids, word_vocabulary, test_sentences, max_sentence)
     labels2ids, ids2labels, label_num = util.build_label_ids(train_labels + valid_labels)
     train_labels2ids = util.label2id(labels2ids, train_labels, max_sentence)
     test_labels2ids = util.label2id(labels2ids, test_labels, max_sentence)
-    
+    print('finish converting')
 #    run_config = tf.ConfigProto()
 #    run_config.gpu_options.allow_growth=True
 #    with tf.Session(config=run_config) as sess:
+#    with tf.device('/cpu:0'):
     with tf.Session() as sess:
+        print('begin training')
         model = cnn_bilstm_crf(FLAGS.clip_grad, FLAGS.batch_size, FLAGS.char_embedding_size, 
                                FLAGS.word_embedding_size, FLAGS.filter_num, FLAGS.hidden_dim, 
                                FLAGS.dropout_rate, max_sentence, max_word, word_embedding, 
                                char_embedding, train_words2ids, train_chars2ids, train_labels2ids, 
                                train_sequence_lengths, test_words2ids, test_chars2ids, 
                                test_labels2ids, test_sequence_lengths, label_num)
-        emit_matrix, transition_params = model.train(FLAGS, sess)
-#save training model        
-        saver = tf.train.Saver()
-        saver.save(sess, 'Model/model.ckpt')
-        
-        print('start running test')
+        model.train(FLAGS, sess)
+        print('finish training')
+        print('start testing')
         if os.path.exists('Model/model.ckpt.meta'): 
             saver = tf.train.Saver()
             saver.restore(sess, './Model/model.ckpt')
-            model.test(sess, FLAGS, emit_matrix, transition_params, ids2labels, label_num)
+#                emit_matrix = emit_matrix.eval()
+#                transition_params = transition_params.eval()
+            model.test(sess, FLAGS, ids2labels, label_num)
         else:
             raise Exception("[!] Train a model first")
 

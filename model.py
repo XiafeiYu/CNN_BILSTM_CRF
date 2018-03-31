@@ -36,7 +36,7 @@ class cnn_bilstm_crf(object):
 #        label_num: the total number of labels
 #-------------------------------------------------------------------------------        
         self.clip_grad = clip_grad
-        self.batch_size = 10
+        self.batch_size = batch_size
         self.char_embedding_size = char_embedding_size
         self.word_embedding_size = word_embedding_size
         self.filter_num = filter_num
@@ -54,10 +54,10 @@ class cnn_bilstm_crf(object):
         self.test_sequence_lengths = test_sequence_lengths
         self.label_num = label_num
         
-        self.input_words_ids = tf.placeholder(tf.int32, shape = [None, max_sentence])
-        self.input_chars_ids = tf.placeholder(tf.int32, shape = [None, max_sentence, max_word])
-        self.input_labels = tf.placeholder(tf.int32, shape = [None, max_sentence])
-        self.input_sequence_lengths = tf.placeholder(tf.int32, shape = [None])
+        self.input_words_ids = tf.placeholder(tf.int32, shape = [self.batch_size, max_sentence])
+        self.input_chars_ids = tf.placeholder(tf.int32, shape = [self.batch_size, max_sentence, max_word])
+        self.input_labels = tf.placeholder(tf.int32, shape = [self.batch_size, max_sentence])
+        self.input_sequence_lengths = tf.placeholder(tf.int32, shape = [self.batch_size])
         self.word_embedding = tf.Variable(word_embed, name = 'word_embedding')
         self.char_embedding = tf.Variable(char_embed, name = 'char_embedding')
 #--------------------using ids to find corresponding embedding vectors-------------------    
@@ -148,8 +148,9 @@ class cnn_bilstm_crf(object):
         chars_represent = self.CNN(batch_char_embedding)        
         final_embedding = tf.concat([chars_represent, batch_word_embedding], 2)            
         outputs = self.bilstm(final_embedding, self.input_sequence_lengths)
-        emit_matrix = self.linear(outputs, self.label_num)
-        loss, transition_params = self.cal_loss(emit_matrix, self.input_labels, self.input_sequence_lengths)
+        self.emit_matrix = self.linear(outputs, self.label_num)
+        loss, self.transition_params = self.cal_loss(self.emit_matrix, self.input_labels, self.input_sequence_lengths)
+        
         optimizer = self.optimize(config.learning_rate, loss, config.momentum)
         
         if os.path.exists('Model/model.ckpt.meta'): 
@@ -157,9 +158,6 @@ class cnn_bilstm_crf(object):
             saver.restore(sess, './Model/model.ckpt')
         else:
             tf.global_variables_initializer().run()
-#        if os.path.exists('Model/model.ckpt.meta'): 
-#            saver = tf.train.Saver()
-#            saver.restore(sess, './Model/model.ckpt')
         num_batch = len(self.train_words2ids) // config.batch_size
         for epo in range(config.epoch):
             for i in range(num_batch):
@@ -167,7 +165,7 @@ class cnn_bilstm_crf(object):
                 batch_chars_ids = np.array(self.train_chars2ids[i*config.batch_size : (i+1)*config.batch_size]) 
                 batch_labels = np.array(self.train_labels2ids[i*config.batch_size : (i+1)*config.batch_size])
                 batch_sequence_lengths = np.array(self.train_sequence_lengths[i*config.batch_size : (i+1)*config.batch_size])
-                _, show_loss, predication, trans_matrix = sess.run([optimizer, loss, emit_matrix, transition_params], 
+                _, predication, show_loss, trans_matrix = sess.run([optimizer, self.emit_matrix, loss, self.transition_params], 
                                                      feed_dict = {self.input_words_ids: batch_words_ids, 
                                                                   self.input_chars_ids: batch_chars_ids,
                                                                   self.input_labels: batch_labels,
@@ -177,24 +175,26 @@ class cnn_bilstm_crf(object):
                 p = self.evaluate(
                         config.batch_size, predict_labels, batch_labels, batch_sequence_lengths)
                 if i % 10 == 0:    
-#                    show_loss = loss.eval(feed_dict = {input_words_ids: batch_words_ids, 
-#                                                 input_chars_ids: batch_chars_ids,
-#                                                 input_labels: batch_labels,
-#                                                 input_sequence_lengths: batch_sequence_lengths})
+#                    show_loss = loss.eval(feed_dict = {self.input_words_ids: batch_words_ids, 
+#                                                 self.input_chars_ids: batch_chars_ids,
+#                                                 self.input_labels: batch_labels,
+#                                                 self.input_sequence_lengths: batch_sequence_lengths})
 #                    print("Epoch: [%2d] [%4d/%4d], loss: %.8f"% (epo, i, num_batch, show_loss))
                     print("Epoch: [%2d] [%4d/%4d], loss: %.8f, accurate = %.4f"% (epo, i, num_batch, show_loss, p))
-        return (emit_matrix, transition_params)
+        saver = tf.train.Saver()
+        saver.save(sess, 'Model/model.ckpt')        
+#        return (emit_matrix, transition_params)
 #-------------------------test---------------------
-    def test(self, sess, config, emit_matrix, transition_params, ids2labels, label_num):        
+    def test(self, sess, config, ids2labels, label_num):        
         predict_label = []
-        test_label = []        
+        test_label = []         
         batch_num = len(self.test_words2ids) // config.batch_size
         for i in range(batch_num):
             batch_words_ids = np.array(self.test_words2ids[i*config.batch_size : (i+1)*config.batch_size])
             batch_chars_ids = np.array(self.test_chars2ids[i*config.batch_size : (i+1)*config.batch_size]) 
             batch_labels = np.array(self.test_labels2ids[i*config.batch_size : (i+1)*config.batch_size])
             batch_sequence_lengths = np.array(self.test_sequence_lengths[i*config.batch_size : (i+1)*config.batch_size])
-            predication, trans_matrix = sess.run([emit_matrix, transition_params], 
+            predication, trans_matrix = sess.run([self.emit_matrix, self.transition_params], 
                                                  feed_dict = {self.input_words_ids: batch_words_ids, 
                                                               self.input_chars_ids: batch_chars_ids,
                                                               self.input_labels: batch_labels,
@@ -207,8 +207,18 @@ class cnn_bilstm_crf(object):
             if i % 50 == 0:
                 print('process completed %d %%, please be patient' %int(i/batch_num*100))
         target_names = []
+#       remove the padding labels we add
+        for i, label in enumerate(test_label):
+            test_label[i] = label - 1 
+        for i, label in enumerate(predict_label):
+            predict_label[i] = label - 1         
         for i in range(label_num):
-            target_names.append(ids2labels[i]) 
+            if i == 0:
+                continue
+            target_names.append(ids2labels[i])
+#        f = open('result.txt', 'wb')
+#        f.write(metrics.classification_report(test_label, predict_label, target_names=target_names).encode(encoding = 'utf-8'))
+#        f.close()
         print(metrics.classification_report(test_label, predict_label, target_names=target_names))
 
 
